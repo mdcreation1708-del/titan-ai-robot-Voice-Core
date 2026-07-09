@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TITAN AI - Voice Core</title>
+    <!-- Favicon pulling from your static folder -->
+    <link rel="icon" type="image/png" href="static/logo.png">
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .logo-display {
+            margin-bottom: 20px;
+        }
+        .logo-display img {
+            height: 100px;
+            width: auto;
+        }
+        .voice-node {
+            text-align: center;
+            border: 2px solid #39ff14;
+            box-shadow: 0 0 25px rgba(57, 255, 20, 0.3);
+            padding: 40px;
+            border-radius: 50%;
+            width: 220px;
+            height: 220px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        h2 { color: #39ff14; letter-spacing: 3px; font-size: 1.8rem; margin: 0; }
+        .wave { color: #888; font-size: 0.9rem; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <!-- Logo displayed above the phone interface node -->
+    <div class="logo-display">
+        <img src="static/logo.png" alt="Titan AI / MD Creations Logo">
+    </div>
+
+    <div class="voice-node">
+        <h2>VOICE NODE</h2>
+        <div id="status-text" class="wave">Listening Loop Active</div>
+    </div>
+
+    <script>
+        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+
+        // CRITICAL FIX: Software lockout flag to block self-triggering audio loops
+        let isSpeaking = false;
+
+        recognition.onresult = function(event) {
+            // If Titan is currently speaking, completely ignore whatever the microphone hears
+            if (isSpeaking) {
+                console.log("Speech blocked to prevent repeating echo loop.");
+                return;
+            }
+
+            const command = event.results[event.results.length - 1][0].transcript.toLowerCase();
+            console.log("Heard command:", command);
+
+            if (command.includes("who are you")) {
+                speak("I am Titan, your autonomous A I assistant.");
+            } else if (command.includes("hello")) {
+                speak("Hello M D sir, Titan voice system is online.");
+            }
+        };
+
+        function speak(text) {
+            // Step 1: Engage the software lock and turn off active tracking
+            isSpeaking = true;
+            recognition.stop();
+            document.getElementById("status-text").innerText = "Speaking...";
+
+            let utterance = new SpeechSynthesisUtterance(text);
+            
+            utterance.onend = function() {
+                // Step 2: Release the lock and resume tracking only after the audio file is fully finished
+                isSpeaking = false;
+                recognition.start();
+                document.getElementById("status-text").innerText = "Listening Loop Active";
+                console.log("Lock released. Mic safe to listen.");
+            };
+            
+            window.speechSynthesis.speak(utterance);
+        }
+
+        // Start initial engine loop
+        recognition.start();
+    </script>
+</body>
+</html>
