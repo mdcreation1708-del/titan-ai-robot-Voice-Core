@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TiTaN - Robot Hardware Node</title>
-    <!-- Include browser MQTT library so we don't need a backend -->
+    <!-- Lightweight broker script to sync static sites directly -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         body { background-color: #0b0f19; color: #00e5ff; font-family: monospace; text-align: center; padding: 30px; }
@@ -12,6 +12,7 @@
         .live-indicator { color: #39ff14; font-weight: bold; animation: blink 1.5s infinite; }
         @keyframes blink { 50% { opacity: 0; } }
         .btn { background: #00e5ff; color: #000; font-weight: bold; border: none; padding: 15px 30px; border-radius: 6px; cursor: pointer; font-size: 1.1rem; width: 100%; }
+        .log-box { text-align: left; background: #000; margin-top: 20px; padding: 15px; height: 180px; overflow-y: auto; color: #c9d1d9; font-size: 0.85rem; border-radius: 6px; border: 1px solid #222; }
     </style>
 </head>
 <body>
@@ -22,8 +23,8 @@
         
         <button class="btn" id="act-btn" onclick="bootRobotHead()">WAKE UP TITAN</button>
         
-        <div id="signal-log" style="text-align:left; background:#000; margin-top:20px; padding:15px; height:150px; overflow-y:auto; color:#c9d1d9; font-size:0.85rem; border-radius:6px; border:1px solid #222;">
-            [SYS] Static Core online. Press button to initialize network audio node...
+        <div id="signal-log" class="log-box">
+            [SYS] Core systems online. Press button to initialize hardware audio array...
         </div>
     </div>
 
@@ -34,11 +35,10 @@
         const logBox = document.getElementById('signal-log');
 
         function printLog(text, color="#c9d1d9") {
-            logBox.innerHTML += `<div style="color:${color}">&gt; ${text}</div>`;
+            logBox.innerHTML += `<div style="color:${text.startsWith('[Mic Heard]') ? '#8b949e' : color}">&gt; ${text}</div>`;
             logBox.scrollTop = logBox.scrollHeight;
         }
 
-        // --- TTS Voice Engine ---
         function robotSpeak(textToSay) {
             if ('speechSynthesis' in window) {
                 window.speechSynthesis.cancel();
@@ -47,6 +47,7 @@
                 voiceOut.rate = 0.95;
                 voiceOut.pitch = 0.85;
 
+                // Stop mic loop while speaking to avoid self-trigger feedback echo
                 if (recognition && active) { recognition.abort(); }
                 voiceOut.onend = () => {
                     if (active && recognition) { try { recognition.start(); } catch(e){} }
@@ -61,34 +62,30 @@
             document.getElementById('status-text').innerHTML = "ONLINE";
             document.getElementById('status-text').className = "live-indicator";
             
-            // 1. Speak startup phrase instantly on old phone
             robotSpeak("Hello MD sir Titan is ready");
-            printLog("System initialized. Spoke: 'Hello MD sir Titan is ready'", "#39ff14");
+            printLog("System initialized. Said: 'Hello MD sir Titan is ready'", "#39ff14");
 
-            // 2. Connect directly via WebSockets to a free broker
-            initStaticNetwork();
-
-            // 3. Start local mic listener
+            initStaticLink();
             initLocalMic();
         }
 
-        function initStaticNetwork() {
-            printLog("Connecting to broker channel...", "#ffaa00");
-            // Connects over secure WebSockets straight from the browser
+        function initStaticLink() {
+            printLog("Opening WebSocket channel over secure layer...", "#ffaa00");
             client = mqtt.connect('wss://broker.hivemq.com:8000/mqtt');
 
             client.on('connect', () => {
-                printLog("Connected to static network data link!", "#39ff14");
-                client.subscribe('titan/robot/commands');
+                printLog("Direct cross-site data link successfully established!", "#39ff14");
+                client.subscribe('titan/robot/comms');
             });
 
             client.on('message', (topic, message) => {
                 const data = JSON.parse(message.toString());
-                printLog(`Network command parsed: ${data.command}`, "#00e5ff");
                 
                 if (data.type === "question") {
+                    printLog(`Incoming Question: "${data.payload}"`, "#00e5ff");
                     robotSpeak("OKay Boss Finding");
                 } else if (data.type === "movement") {
+                    printLog(`Incoming Movement Command: [${data.payload}]`, "#39ff14");
                     robotSpeak("moving Boss");
                 }
             });
@@ -107,12 +104,13 @@
 
             recognition.onresult = (event) => {
                 const speech = event.results[0][0].transcript.toLowerCase();
-                printLog(`Heard locally: "${speech}"`, "#8b949e");
+                printLog(`[Mic Heard]: "${speech}"`);
 
-                if (speech.includes("titan") || speech.includes("hey titan")) {
-                    if (speech.includes("forward") || speech.includes("move")) {
+                if (speech.includes("titan") || speech.includes("hey titan") || speech.includes("tighten")) {
+                    if (speech.includes("forward") || speech.includes("move") || speech.includes("moving") || speech.includes("find")) {
+                        printLog("Local Instruction Matrix Match: FORWARD", "#39ff14");
                         robotSpeak("moving Boss");
-                    } else if (speech.includes("stop")) {
+                    } else if (speech.includes("stop") || speech.includes("halt")) {
                         robotSpeak("stopping Boss");
                     }
                 }
