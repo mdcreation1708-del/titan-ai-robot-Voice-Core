@@ -4,15 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TiTaN - Robot Hardware Node</title>
-    <!-- Lightweight broker script to sync static sites directly -->
+    <!-- Direct WebSocket/MQTT Link Script -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
-        body { background-color: #0b0f19; color: #00e5ff; font-family: monospace; text-align: center; padding: 30px; }
-        .node-box { border: 2px solid #00e5ff; background: #111625; padding: 30px; border-radius: 12px; max-width: 500px; margin: 0 auto; box-shadow: 0 0 20px rgba(0,229,255,0.2); }
+        body { background-color: #0b0f19; color: #00e5ff; font-family: monospace; text-align: center; padding: 20px; }
+        .node-box { border: 2px solid #00e5ff; background: #111625; padding: 20px; border-radius: 12px; max-width: 500px; margin: 0 auto; box-shadow: 0 0 20px rgba(0,229,255,0.2); }
         .live-indicator { color: #39ff14; font-weight: bold; animation: blink 1.5s infinite; }
         @keyframes blink { 50% { opacity: 0; } }
         .btn { background: #00e5ff; color: #000; font-weight: bold; border: none; padding: 15px 30px; border-radius: 6px; cursor: pointer; font-size: 1.1rem; width: 100%; }
-        .log-box { text-align: left; background: #000; margin-top: 20px; padding: 15px; height: 180px; overflow-y: auto; color: #c9d1d9; font-size: 0.85rem; border-radius: 6px; border: 1px solid #222; }
+        .log-box { text-align: left; background: #000; margin-top: 15px; padding: 12px; height: 120px; overflow-y: auto; color: #c9d1d9; font-size: 0.85rem; border-radius: 6px; border: 1px solid #222; }
+        video { width: 100%; height: auto; border-radius: 8px; border: 1px dashed #00e5ff; margin-top: 15px; background: #000; transform: scaleX(-1); }
     </style>
 </head>
 <body>
@@ -23,8 +24,11 @@
         
         <button class="btn" id="act-btn" onclick="bootRobotHead()">WAKE UP TITAN</button>
         
+        <!-- Local Preview Video element to trigger the camera system -->
+        <video id="localVideo" autoplay playsinline muted></video>
+        
         <div id="signal-log" class="log-box">
-            [SYS] Core systems online. Press button to initialize hardware audio array...
+            [SYS] Systems standing by. Press button to initialize Video + Audio streams...
         </div>
     </div>
 
@@ -32,10 +36,14 @@
         let recognition;
         let active = false;
         let client;
+        let localStream;
+        let peerConnection;
         const logBox = document.getElementById('signal-log');
+        
+        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
         function printLog(text, color="#c9d1d9") {
-            logBox.innerHTML += `<div style="color:${text.startsWith('[Mic Heard]') ? '#8b949e' : color}">&gt; ${text}</div>`;
+            logBox.innerHTML += `<div style="color:${color}">&gt; ${text}</div>`;
             logBox.scrollTop = logBox.scrollHeight;
         }
 
@@ -47,7 +55,6 @@
                 voiceOut.rate = 0.95;
                 voiceOut.pitch = 0.85;
 
-                // Stop mic loop while speaking to avoid self-trigger feedback echo
                 if (recognition && active) { recognition.abort(); }
                 voiceOut.onend = () => {
                     if (active && recognition) { try { recognition.start(); } catch(e){} }
@@ -56,37 +63,68 @@
             }
         }
 
-        function bootRobotHead() {
+        async function bootRobotHead() {
             active = true;
             document.getElementById('act-btn').style.display = 'none';
             document.getElementById('status-text').innerHTML = "ONLINE";
             document.getElementById('status-text').className = "live-indicator";
             
             robotSpeak("Hello MD sir Titan is ready");
-            printLog("System initialized. Said: 'Hello MD sir Titan is ready'", "#39ff14");
+            printLog("Audio engine active.", "#39ff14");
+
+            // Request Camera + Mic stream permissions explicitly from user click
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                document.getElementById('localVideo').srcObject = localStream;
+                printLog("Camera access granted. Starting stream capture array...", "#39ff14");
+            } catch (err) {
+                printLog("CRITICAL: Camera pipeline access denied.", "#ff5555");
+            }
 
             initStaticLink();
             initLocalMic();
         }
 
         function initStaticLink() {
-            printLog("Opening WebSocket channel over secure layer...", "#ffaa00");
             client = mqtt.connect('wss://broker.hivemq.com:8000/mqtt');
 
             client.on('connect', () => {
-                printLog("Direct cross-site data link successfully established!", "#39ff14");
+                printLog("Network sync link established.", "#39ff14");
                 client.subscribe('titan/robot/comms');
+                client.subscribe('titan/webrtc/signal-deck');
             });
 
-            client.on('message', (topic, message) => {
+            client.on('message', async (topic, message) => {
                 const data = JSON.parse(message.toString());
                 
-                if (data.type === "question") {
-                    printLog(`Incoming Question: "${data.payload}"`, "#00e5ff");
-                    robotSpeak("OKay Boss Finding");
-                } else if (data.type === "movement") {
-                    printLog(`Incoming Movement Command: [${data.payload}]`, "#39ff14");
-                    robotSpeak("moving Boss");
+                if (topic === 'titan/robot/comms') {
+                    if (data.type === "question") {
+                        robotSpeak("OKay Boss Finding");
+                    } else if (data.type === "movement") {
+                        robotSpeak("moving Boss");
+                    }
+                } 
+                // WebRTC live signaling channel to handle streaming without python server
+                else if (topic === 'titan/webrtc/signal-deck' && data.to === 'robot') {
+                    if (data.sdp && data.sdp.type === 'offer') {
+                        peerConnection = new RTCPeerConnection(rtcConfig);
+                        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                        
+                        peerConnection.onicecandidate = (e) => {
+                            if (e.candidate) {
+                                client.publish('titan/webrtc/signal-deck', JSON.stringify({ to: 'deck', candidate: e.candidate }));
+                            }
+                        };
+                        
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                        const answer = await peerConnection.createAnswer();
+                        await peerConnection.setLocalDescription(answer);
+                        
+                        client.publish('titan/webrtc/signal-deck', JSON.stringify({ to: 'deck', sdp: answer }));
+                        printLog("Video pipeline feeding live to controller dashboard node.", "#39ff14");
+                    } else if (data.candidate && peerConnection) {
+                        try { await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e){}
+                    }
                 }
             });
         }
@@ -99,18 +137,14 @@
             recognition.continuous = false;
             recognition.interimResults = false;
             recognition.lang = 'en-US';
-
             recognition.onend = () => { if(active) { try { recognition.start(); } catch(e){} } };
 
             recognition.onresult = (event) => {
                 const speech = event.results[0][0].transcript.toLowerCase();
-                printLog(`[Mic Heard]: "${speech}"`);
-
                 if (speech.includes("titan") || speech.includes("hey titan") || speech.includes("tighten")) {
                     if (speech.includes("forward") || speech.includes("move") || speech.includes("moving") || speech.includes("find")) {
-                        printLog("Local Instruction Matrix Match: FORWARD", "#39ff14");
                         robotSpeak("moving Boss");
-                    } else if (speech.includes("stop") || speech.includes("halt")) {
+                    } else if (speech.includes("stop")) {
                         robotSpeak("stopping Boss");
                     }
                 }
