@@ -3,177 +3,121 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TiTaN Voice Core Engine</title>
+    <title>TiTaN - Robot Hardware Node</title>
+    <!-- Include browser MQTT library so we don't need a backend -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
-        body {
-            background-color: #0d1117;
-            color: #00e5ff;
-            font-family: 'Courier New', Courier, monospace;
-            padding: 30px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        .core-container {
-            border: 2px solid #00e5ff;
-            background-color: #161b22;
-            padding: 25px;
-            border-radius: 8px;
-            width: 100%;
-            max-width: 600px;
-            box-shadow: 0 0 15px rgba(0, 229, 255, 0.2);
-        }
-        .status-display {
-            background-color: #0d1117;
-            border: 1px solid #30363d;
-            padding: 15px;
-            border-radius: 4px;
-            font-size: 1.1rem;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        .terminal-box {
-            background-color: #000;
-            border: 1px solid #30363d;
-            height: 300px;
-            overflow-y: auto;
-            padding: 15px;
-            font-size: 0.9rem;
-            color: #c9d1d9;
-            border-radius: 4px;
-        }
-        .control-btn {
-            width: 100%;
-            background-color: #21262d;
-            border: 1px solid #00e5ff;
-            color: #00e5ff;
-            padding: 15px;
-            font-size: 1rem;
-            font-weight: bold;
-            cursor: pointer;
-            border-radius: 6px;
-            margin-bottom: 15px;
-            transition: 0.2s;
-        }
-        .control-btn:hover {
-            background-color: #00e5ff;
-            color: #000;
-        }
+        body { background-color: #0b0f19; color: #00e5ff; font-family: monospace; text-align: center; padding: 30px; }
+        .node-box { border: 2px solid #00e5ff; background: #111625; padding: 30px; border-radius: 12px; max-width: 500px; margin: 0 auto; box-shadow: 0 0 20px rgba(0,229,255,0.2); }
+        .live-indicator { color: #39ff14; font-weight: bold; animation: blink 1.5s infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+        .btn { background: #00e5ff; color: #000; font-weight: bold; border: none; padding: 15px 30px; border-radius: 6px; cursor: pointer; font-size: 1.1rem; width: 100%; }
     </style>
 </head>
 <body>
 
-    <div class="core-container">
-        <h2 style="margin-top:0; text-align:center; letter-spacing: 2px;">TITAN VOICE CORE ENGINE</h2>
+    <div class="node-box">
+        <h2>🤖 TiTaN HARDWARE HEAD NODE</h2>
+        <p>Status: <span id="status-text" style="color:#ffaa00;">Awaiting Activation</span></p>
         
-        <div class="status-display">
-            SYSTEM STATUS: <span id="core-status" style="color: #ffaa00;">OFFLINE</span>
-        </div>
-
-        <button class="control-btn" id="trigger-btn" onclick="toggleVoiceCore()">INITIALIZE CORE LINK</button>
-
-        <div class="terminal-box" id="voice-logs">
-            [SYSTEM] Voice Core standing by. Awaiting hardware link initialization...
+        <button class="btn" id="act-btn" onclick="bootRobotHead()">WAKE UP TITAN</button>
+        
+        <div id="signal-log" style="text-align:left; background:#000; margin-top:20px; padding:15px; height:150px; overflow-y:auto; color:#c9d1d9; font-size:0.85rem; border-radius:6px; border:1px solid #222;">
+            [SYS] Static Core online. Press button to initialize network audio node...
         </div>
     </div>
 
     <script>
         let recognition;
-        let coreActive = false;
-        const logs = document.getElementById('voice-logs');
-        const statusDisplay = document.getElementById('core-status');
-        const triggerBtn = document.getElementById('trigger-btn');
+        let active = false;
+        let client;
+        const logBox = document.getElementById('signal-log');
 
-        function logToTerminal(message, color = "#c9d1d9") {
-            logs.innerHTML += `<div style="color: ${color};">&gt; ${message}</div>`;
-            logs.scrollTop = logs.scrollHeight;
+        function printLog(text, color="#c9d1d9") {
+            logBox.innerHTML += `<div style="color:${color}">&gt; ${text}</div>`;
+            logBox.scrollTop = logBox.scrollHeight;
         }
 
-        function toggleVoiceCore() {
-            if (!coreActive) {
-                initSpeechEngine();
-            } else {
-                stopSpeechEngine();
+        // --- TTS Voice Engine ---
+        function robotSpeak(textToSay) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const voiceOut = new SpeechSynthesisUtterance(textToSay);
+                voiceOut.lang = 'en-US';
+                voiceOut.rate = 0.95;
+                voiceOut.pitch = 0.85;
+
+                if (recognition && active) { recognition.abort(); }
+                voiceOut.onend = () => {
+                    if (active && recognition) { try { recognition.start(); } catch(e){} }
+                };
+                window.speechSynthesis.speak(voiceOut);
             }
         }
 
-        function initSpeechEngine() {
+        function bootRobotHead() {
+            active = true;
+            document.getElementById('act-btn').style.display = 'none';
+            document.getElementById('status-text').innerHTML = "ONLINE";
+            document.getElementById('status-text').className = "live-indicator";
+            
+            // 1. Speak startup phrase instantly on old phone
+            robotSpeak("Hello MD sir Titan is ready");
+            printLog("System initialized. Spoke: 'Hello MD sir Titan is ready'", "#39ff14");
+
+            // 2. Connect directly via WebSockets to a free broker
+            initStaticNetwork();
+
+            // 3. Start local mic listener
+            initLocalMic();
+        }
+
+        function initStaticNetwork() {
+            printLog("Connecting to broker channel...", "#ffaa00");
+            // Connects over secure WebSockets straight from the browser
+            client = mqtt.connect('wss://broker.hivemq.com:8000/mqtt');
+
+            client.on('connect', () => {
+                printLog("Connected to static network data link!", "#39ff14");
+                client.subscribe('titan/robot/commands');
+            });
+
+            client.on('message', (topic, message) => {
+                const data = JSON.parse(message.toString());
+                printLog(`Network command parsed: ${data.command}`, "#00e5ff");
+                
+                if (data.type === "question") {
+                    robotSpeak("OKay Boss Finding");
+                } else if (data.type === "movement") {
+                    robotSpeak("moving Boss");
+                }
+            });
+        }
+
+        function initLocalMic() {
             window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-            if (!window.SpeechRecognition) {
-                statusDisplay.innerHTML = "UNSUPPORTED ENVIRONMENT";
-                statusDisplay.style.color = "#ff5555";
-                logToTerminal("ERROR: Mobile browser lacks global WebSpeech SpeechRecognition frameworks.", "#ff5555");
-                return;
-            }
+            if(!window.SpeechRecognition) return;
 
             recognition = new window.SpeechRecognition();
-            
-            // Mobile Optimization parameters
-            recognition.continuous = false; 
+            recognition.continuous = false;
             recognition.interimResults = false;
             recognition.lang = 'en-US';
 
-            recognition.onstart = () => {
-                coreActive = true;
-                statusDisplay.innerHTML = "ACTIVE LISTENING";
-                statusDisplay.style.color = "#39ff14";
-                triggerBtn.innerHTML = "TERMINATE CORE LINK";
-                logToTerminal("Voice Core successfully linked to microphone hardware. Monitoring...", "#39ff14");
-            };
-
-            recognition.onerror = (event) => {
-                console.error("Core Engine Error: ", event.error);
-                if (event.error === 'not-allowed') {
-                    logToTerminal("CRITICAL: Microphone access denied by security layer. Check browser site permissions.", "#ff5555");
-                    stopSpeechEngine();
-                }
-            };
-
-            // Infinite loop recreation for mobile background stability
-            recognition.onend = () => {
-                if (coreActive) {
-                    recognition.start();
-                }
-            };
+            recognition.onend = () => { if(active) { try { recognition.start(); } catch(e){} } };
 
             recognition.onresult = (event) => {
-                const transcript = event.results[0][0].transcript.trim().toLowerCase();
-                logToTerminal(`Audio Matched: "${transcript}"`, "#8b949e");
+                const speech = event.results[0][0].transcript.toLowerCase();
+                printLog(`Heard locally: "${speech}"`, "#8b949e");
 
-                // Explicit parsing matrix checking wake token phonetics on mobile engines
-                if (transcript.includes("titan") || transcript.includes("hey titan") || transcript.includes("tighten")) {
-                    logToTerminal("WAKE WORD DETECTED: WAKING UP TITAN SYSTEM CORE", "#39ff14");
-                    
-                    // Route your target payload executions here
-                    executeVoiceAction(transcript);
+                if (speech.includes("titan") || speech.includes("hey titan")) {
+                    if (speech.includes("forward") || speech.includes("move")) {
+                        robotSpeak("moving Boss");
+                    } else if (speech.includes("stop")) {
+                        robotSpeak("stopping Boss");
+                    }
                 }
             };
-
             recognition.start();
-        }
-
-        function stopSpeechEngine() {
-            coreActive = false;
-            if (recognition) {
-                recognition.stop();
-            }
-            statusDisplay.innerHTML = "OFFLINE";
-            statusDisplay.style.color = "#ff5555";
-            triggerBtn.innerHTML = "INITIALIZE CORE LINK";
-            logToTerminal("Voice Core terminated safely. Microphone hardware unlinked.", "#ff5555");
-        }
-
-        function executeVoiceAction(phrase) {
-            if (phrase.includes("forward")) {
-                logToTerminal("Action Parsed: Sending Chassis Movement Vector [FORWARD]", "#00e5ff");
-            } else if (phrase.includes("stop")) {
-                logToTerminal("Action Parsed: Sending Chassis Movement Vector [HALT]", "#ff5555");
-            } else if (phrase.includes("left")) {
-                logToTerminal("Action Parsed: Sending Chassis Movement Vector [LEFT]", "#00e5ff");
-            } else if (phrase.includes("right")) {
-                logToTerminal("Action Parsed: Sending Chassis Movement Vector [RIGHT]", "#00e5ff");
-            }
         }
     </script>
 </body>
